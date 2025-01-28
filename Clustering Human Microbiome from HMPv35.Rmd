@@ -1,0 +1,756 @@
+---
+title: "Clustering Human Microbiome Project (HMP) Data from variable regions 3-5"
+author: "Richard Goodman"
+date: "30 January 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This workflow takes 16S rRNA data from the human microbiome project (HMP) and primarily uses the Phyloseq package in R to cluster the data and determine if this corresponds to body site i.e. saliva, stool, sebum. The HMPv35 dataset is used which was sequenced from the amplicons of the rRNA 16S variable regions 3-5. 
+
+# 1. Working in Phyloseq with HMPv35
+
+## 1.1  Installing and Loading Packages
+
+Install all necessary packages into R.
+
+Phyloseq is a package used for phylogenetic data and produces many of the graphs in the report, to see installation information see http://joey711.github.io/phyloseq/install.html. 
+
+factoextra and mclust can be installed using the install.packages() function; use install.packages("mclust") and install.packages("factoextra") respectively.
+
+HMP16SData has an alternative dataset to HMPv35, called V35, which contains a variable relating to individuals, which MicrobeDS cannot provide, for installation see https://github.com/waldronlab/HMP16SData. 
+
+```{r, warning = FALSE, message = FALSE, results='hide'}
+
+# Make sure these are all installed as packages first 
+library(dplyr)
+library(ggplot2)
+library(phyloseq)
+library("ape")
+library("scales")
+library("grid")
+library(factoextra)
+library (mclust)
+
+```
+
+## 1.2 Calling for HMPv35
+
+The HMPv35 dataset is the one primarily used in this project, for information on installing see https://github.com/twbattaglia/MicrobeDS. 
+
+I originally installed HMPv35 with MicrobesDS but I had some issues. 
+
+Now I download it from this Github repository (https://github.com/rngoodman/clustering-HMP-data/blob/main/datasets/HMPv35.Rdata)
+
+The HMPv35 data set is so named because sequencing was undertaken on the ribosome 16S variable regions 3-5, this was taken from every sample in the study. 
+
+Now load in the HMPv35 data and check it. 
+
+```{r,  warning = FALSE, message = FALSE, results='hide'}
+
+load(file = "HMPv35.Rdata")
+
+# Check number of samples
+nsamples(HMPv35) 
+
+# Check sample metadata
+sample_variables(HMPv35)
+sample_data(HMPv35)$sample_type
+
+#Get a brief summary of the data set
+summary(HMPv35)
+
+```
+
+## 1.3 Accessing Data
+
+HMPv35 is an s4 dataset so needs to be accessed in a certain way 
+Use plyr:: when you can here 
+
+```{r  warning = FALSE, message = FALSE, results='hide'}
+
+#There are four parts of a Phyloseq component 
+
+otu_table(HMPv35) # Operational Taxonomic Units (OTU) table
+phy_tree(HMPv35) # Phylogenetic Tree
+sample_data(HMPv35) # Sample data
+tax_table(HMPv35) # Taxonomy table
+
+
+```
+
+## 1.4 Pre-processing
+
+The following preprocessed datasets are used predominantly throughout the Analysis. HM.GEN is the original HMPv35 dataset agglomerated 
+
+```{r,  warning = FALSE, message = FALSE, results='hide'}
+
+# Agglomerate based on Genus Level 
+  
+HM.GEN = tax_glom(HMPv35, taxrank = "Genus")
+
+set.seed(1234)
+
+# Subsample A
+my_samples = sample(colnames(otu_table(HM.GEN)), 500)
+HM.S500A.prep  = prune_samples(my_samples, HM.GEN)
+
+set.seed(4321)
+
+# Subsample B
+my_samples = sample(colnames(otu_table(HM.GEN)), 500)
+HM.S500B.prep = prune_samples(my_samples, HM.GEN)
+
+# Unless you set seed these samples will always be different
+# Subsample A and B are saved as .RData files 
+
+
+```
+
+# 2. Determining Relative Proportion of Genera
+
+## 2.1 Plotting Abundance of the top 50 Genera from the OTUs
+
+```{r, fig.dim = c(10,5)}
+
+#Create a new variable so HM.GEN is not altered 
+
+HM.GEN.prop = HM.GEN
+
+# Filtering Top 50 Taxonomic units specified by Genera 
+
+top50otus = names(sort(taxa_sums(HM.GEN), TRUE)[1:50]) #selects top 50 Genera
+taxtab50 = cbind(tax_table(HM.GEN.prop), Genus50 = NA) #adds this onto my taxtable
+taxtab50[top50otus, "Genus50"] <- as(tax_table(HM.GEN.prop)[top50otus, "Genus"], "character")
+
+# Make the taxonomic table HM.GEN.prop the top 50 Genera, the rest will be classed as NA
+tax_table(HM.GEN.prop) = tax_table(taxtab50)
+
+# Choose a title for the graph
+title = "Top 50 Genera Abundance"
+
+# Plot a graph of abundances, these are not on equal footing as they have not been trasformed yet (see below)
+plot_bar(HM.GEN.prop, "sample_type", fill = "Genus50", 
+         title = "Top 50 abundance") + coord_flip()
+
+```
+
+## 2.2 Converting to Percentages 
+
+```{r, fig.dim = c(10,5)}
+
+#We merge the abundances from all the sample types 
+
+HMGm = merge_samples(HM.GEN.prop, "sample_type")
+
+#We can then repair the values which have been merged for each sample type
+
+sample_data(HMGm)$sample_type <- levels(sample_data(HM.GEN.prop)$sample_type)
+
+#We can then calculate percentages against the total HMGm
+
+HMGms = transform_sample_counts(HMGm, function(x) 100 * x/sum(x))
+
+#Then we can plot the Figure 
+
+title = "Percentage of Sequences per Sample Type"
+
+plot_bar(HMGms, "sample_type", fill = "Genus50", title = title) + coord_flip() + 
+  ylab("Percentage of Sequences") + labs(fill="Top 50 Genera")
+
+#Then using prune_taxa I can remove the NAs from the graph which appear as
+#grey regions in the Figure 
+
+HMGm.solo = prune_taxa(top50otus, HMGms)
+
+title = "Percentage of Sequences (including only top 50 most abundant taxa)"
+
+plot_bar(HMGm.solo, "sample_type", fill = "Genus50", title = title) + coord_flip() + 
+  ylab("Percentage of Sequences") + ylim(0, 100)  + labs(fill="Top 50 Genera") 
+
+```
+
+## 2.3 Facetting bodysite against sampletype 
+
+```{r, warning = FALSE, fig.dim = c(10,5)}
+
+sample_variables(HMPv35)
+levels(sample_data(HMPv35)$body_site)
+  
+# merge samples by a variable which represents both body_site and body_type 
+
+sample_data(HM.GEN.prop)$bodsam <- paste0(sample_data(HM.GEN.prop)$body_site, sample_data(HM.GEN.prop)$sample_type)
+
+HMgsm = merge_samples(HM.GEN.prop, "bodsam")
+
+# repair factors after the merge
+
+sample_data(HMgsm)$sample_type = levels(sample_data(HM.GEN.prop)$sample_type)[get_variable(HMgsm, 
+                                                                                         "sample_type")]
+sample_data(HMgsm)$body_site = levels(sample_data(HM.GEN.prop)$body_site)[get_variable(HMgsm, 
+                                                                                       "body_site")]
+# transform to percentages against total of HMgsm using transform_sample_counts 
+
+HMgsmp = transform_sample_counts(HMgsm, function(x) 100 * x/sum(x))
+
+# Plot with facetting against bodysite 
+
+HMgsm50 = prune_taxa(top50otus, HMgsmp)
+
+title = "Percentage of top 50 Genera across Body site and Sample type"
+
+px = plot_bar(HMgsm50, "body_site", fill = "Genus50", title = title) + coord_flip() + 
+  labs(colour = "genus", fill="Top 50 Genera")
+
+px + facet_wrap(~sample_type)
+
+```
+
+## 2.4 Plotting against Subjects and Samples
+
+```{r,  warning = FALSE, message = FALSE, results='hide'}
+
+n =15 #the number of samples to choose 
+ran15sam = names(sort(sample_sums(HM.GEN), decreasing = TRUE)[1:n])
+
+#selects top n samples from our HM.GEN.prop
+HM.sam15 = prune_samples(ran15sam, HM.GEN.prop)
+
+# If we don't add this it treats iD as number as we have scale problems
+sample_data(HM.sam15)$host_subject_id = as.factor(sample_data(HM.sam15)$host_subject_id)
+HM.sam15 = subset_samples(HM.sam15, host_subject_id != "700016012") # this subject contains two samples so disrupts x axis
+sample_data(HM.sam15)$host_subject_id #tests it out
+
+# If you want to change Genus 50 to this specific example use this
+top50otus = names(sort(taxa_sums(HM.sam15), TRUE)[1:50]) #selects top 50 Genus
+taxtab50 = cbind(tax_table(HM.sam15), Genus50 = NA) #adds this onto my taxtable
+taxtab50[top50otus, "Genus50"] <- as(tax_table(HM.sam15)[top50otus, "Genus"], "character")
+
+# Change our tax table to only include the top 50 Genera
+tax_table(HM.sam15) = tax_table(taxtab50)
+
+#Name the sample 
+HMXX = HM.sam15
+
+#Transform to percentages of total available
+HMXX = transform_sample_counts(HMXX, function(x) 100 * x/sum(x))
+
+```
+
+Once we have our vector HMXX, we can plot against samples. 
+
+```{r, fig.dim = c(12,5)}
+
+# Give it a title 
+title = "Percentage of Sequences per Indivdual Subject"
+
+plot_bar(HMXX, "X.SampleID", fill = "Genus50", title = title) + coord_flip() + 
+  ylab("Percentage of Sequences") + labs(fill="Top 50 Genera")
+
+# Make this into a vector
+px4 = plot_bar(HMXX, "X.SampleID", fill = "Genus50", title = title) + coord_flip() + 
+  ylab("Percentage of Sequences") + labs(fill="Top 50 Genera")
+
+# facet wrap against sample type 
+px4 + facet_wrap(~sample_type)
+
+```
+
+We can also plot against Subject IDs
+
+```{r, fig.dim = c(10,5)}
+
+# Give it a title 
+title = "Percentage of Sequences per Indivdual Subject"
+
+# Just the subject ID against relative abundance 
+plot_bar(HMXX, "host_subject_id", fill = "Genus50", title = title) + coord_flip() + 
+  ylab("Percentage of Sequences") + labs(fill="Top 50 Genera")
+
+# Make this into a vector
+px5 = plot_bar(HMXX, "host_subject_id", fill = "Genus50", title = title) + coord_flip() + 
+  ylab("Percentage of Sequences") + labs(fill="Top 50 Genera")
+
+# facet wrap against sample type 
+px5 + facet_wrap(~sample_type)
+```
+
+
+# 3. Ordination Plotting 
+
+Phyloseq has an in-built ordination function
+
+## 3.1 Sub-sampling
+
+Here we subsample for 500 Samples
+
+```{r}
+
+# The first 500 OTUs (1-500) when col names are called 
+
+set.seed(1234)
+
+my_samples = sample(colnames(otu_table(HM.GEN)), 500)
+HM.S500A.prep = prune_samples(my_samples, HM.GEN)
+
+# The second 500 OTUs (500-1000) when col names are called 
+
+set.seed(4321)
+
+my_samples = sample(colnames(otu_table(HM.GEN)), 500)
+HM.S500B.prep = prune_samples(my_samples, HM.GEN)
+
+```
+
+This is called HM.S500B.prep: HM means it's from the HMPv35 dataset, S500B means there are 500 samples present and prep means that it is a pre-processed Phyloseq ready for Ordination
+
+## 3.2 Transform to even sampling depth 
+
+This seems to be an essential step in the ordination process
+
+```{r,  warning = FALSE, message = FALSE, results='hide'}
+
+HM.S500B.prep   = transform_sample_counts(HM.S500B.prep, function(x) 1E6 * x/sum(x))
+
+```
+
+## 3.3 Remove any NAs - if present
+
+This is a required step if there are NAs present otherwise the ordination throws up. To first of all see if there are any NAs present 
+
+```{r,  warning = FALSE, message = FALSE, results='hide'}
+
+csum <- colSums(otu_table(HM.S500B.prep))
+any(is.na(csum)) #If this comes up as FALSE skip this step and move onto ordination
+which(any(is.na(csum)))
+
+```
+
+Then to remove any NAs
+
+```{r}
+
+to.keep = colSums(is.na(otu_table(HM.S500B.prep)))==0
+HM.G.ord.no.na = prune_samples(to.keep, HM.S500B.prep)
+
+```
+
+## 3.4 Ordinate()
+
+The ordinate() function is relatively simple but requires alot of computational energy if the Phyloseq object has not been succifiently pre-processed. 
+
+The first argument is the Phyloseq object, the second is the ordination method such as NMDS and MDS/PC0A which both work on distance matrices, the third is the distance such as unifrac, bray etc.
+
+```{r, warning = FALSE, message = FALSE}
+
+HM.S500B.ord = ordinate(HM.S500B.prep, "NMDS", "bray")
+
+# For any further plotting use: HM.500sam2.prep, HM.S500B.ord
+
+HM.500sam2.prep = HM.G.ord.no.na
+
+```
+
+## 3.5 Taxa type ordination plot
+
+```{r}
+
+p.taxa.S500B = plot_ordination(HM.500sam2.prep, HM.S500B.ord, type="taxa", 
+                          color="Phylum", 
+                          title="NMDS Taxa Ordination, 500 Samples, subsample B")
+
+p.taxa.S500B 
+
+p.taxa.S500B + facet_wrap(~Phylum, 3)
+
+```
+
+
+## 3.6 Sample type ordination plot 
+
+```{r}
+
+
+p.sam.S500B = plot_ordination(HM.500sam2.prep, HM.S500B.ord, type = 'samples', 
+                          color = "sample_type",  
+                          title="NMDS Sample ordination, 500 Samples, subsample B")
+
+p.sam.S500B     
+
+```
+
+
+## 3.7 Biplot ordination
+
+```{r}
+
+# Firstly define a shape 
+
+shape = c(19, 15, 16, 17, 18, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 20, 21)
+
+p.biplot.S500B = plot_ordination(HM.500sam2.prep, HM.S500B.ord, type = "biplot", 
+                            color ="sample_type", label = "Genus", 
+                            title ="Body site sample NMDS ordination, 500 Samples")
+
+p.biplot.S500B + scale_shape_manual(values=shape)
+
+
+```
+
+
+## 3.8 Split plot ordination 
+
+```{r, warning = FALSE}
+
+p.split.S500B = plot_ordination(HM.500sam2.prep, HM.S500B.ord, type = "split", 
+                                color = "sample_type", shape ="Phylum",
+                                title = "Split Graphic NMDS Ordination, 500 Samples")
+
+p.split.S500B + labs(fill="Sample Type") + scale_shape_manual(values = shape)
+
+```
+
+## 3.9 Unifrac and Ordination 
+
+```{r}
+
+HM.S500B.ordu = ordinate(HM.500sam2.prep, "PCoA", "unifrac", weighted=TRUE)
+
+#a sample plot of weighted Unifrac
+
+p.ordu.S500B = plot_ordination(HM.500sam2.prep, HM.S500B.ordu, color="sample_type",
+                title = "MDS/PCoA on weighted-UniFrac distance, HMPv35, 500 samples")
+
+p.ordu.S500B + scale_shape_manual(values = shape)
+
+
+```
+
+# 4. Kmeans Cluster Analysis on HMPv35
+
+## 4.1 Calculating distances in Phyloseq
+we can use the distance() function in phyloseq which takes a phyloseq object and a method (i.e. method = "wunifrac" for weighted UniFrac). Only samplewise distances are supported.
+
+```{r}
+
+# For subsample A (HM.S500A.prep)
+S500A.wuni.dist = phyloseq::distance(HM.S500A.prep, method = "wunifrac")
+S500A.uwuni.dist = phyloseq::distance(HM.S500A.prep, method = "uunifrac")
+S500A.jaccard.dist = phyloseq::distance(HM.S500A.prep, method = "jaccard", binary=TRUE)
+
+# For subsample B (HM.S500B.prep)
+S500B.wuni.dist = phyloseq::distance(HM.S500B.prep, method = "wunifrac")
+S500B.uwuni.dist = phyloseq::distance(HM.S500B.prep, method = "uunifrac")
+S500B.jaccard.dist = phyloseq::distance(HM.S500B.prep, method = "jaccard", binary=TRUE)
+
+```
+
+## 4.2 Converting Dist Objects 
+Some of the cluster analysis will only take matrices as arguments so we must at the very least convert our dist objects into matrices. One converted these can also be converted into dataframes if required.
+
+Both unifrac and unwieghted unifrac take a large amount of computational resource so we will calculate distances for our subsampled datasets A and B.
+
+```{r}
+
+# Subsample A
+S500A.wuni.matx = as.matrix(S500A.wuni.dist) # Weighted UniFrac - Convert dist to matrix
+S500A.uwuni.matx = as.matrix(S500A.uwuni.dist) # Unweighted Unifrac - Convert dist to matrix
+S500A.jaccard.matx = as.matrix(S500A.jaccard.dist) # Jaccard - Convert dist to matrix
+
+# Subsample B
+S500B.wuni.matx = as.matrix(S500B.wuni.dist) #Weighted UniFrac - Convert dist to matrix
+S500B.uwuni.matx = as.matrix(S500B.uwuni.dist) # Unweighted Unifrac - Convert dist to matrix
+S500B.jaccard.matx = as.matrix(S500B.jaccard.dist) # Jaccard - Convert dist to matrix
+
+```
+
+## 4.3 Deciding on K i.e. Cluster Number
+The kmeans algorithm requires us to define the number fo clusters we want to use, although there is no prefect way to do this we can create a function which measures the percentage of variance against the number of clusters. To do this we will measure the "with in sum of squares (WSS)" which is the total distance of all the data points from the centroid of the cluster that they are part of. This gives us a graphical indicator of the appropriate amount of clusters to give for the kmeans function.
+
+```{r }
+
+wss.plot <- function(data, nc=15, seed=1234){
+  wss <- (nrow(data)-1)*sum(apply(data,2,var))
+  for (i in 2:nc){
+    set.seed(seed)
+    wss[i] <- sum(kmeans(data, centers=i)$withinss)}
+  plot(1:nc, wss, type="b", xlab="Number of Clusters",
+       ylab="Within groups sum of squares (WSS)",
+       main = "Percentage of variance as a function of the number of clusters, 
+       Jaccard, subsample A")}
+
+wss.plot(S500B.wuni.matx, nc=15)
+
+```
+
+## 4.4 Applying Kmeans 
+
+```{r}
+
+
+#Subsample A
+
+# Calling the Kmeans funct for different distances - 6 clusters are defined 
+kmeans.wuni.S500A = kmeans(S500A.wuni.dist, 6) #kmeans for UnWeighted Unifrac (S500A)
+kmeans.uwuni.S500A = kmeans(S500A.uwuni.dist, 6) #kmeans for Weighted Unifrac (S500A)
+kmeans.jaccard.S500A = kmeans(S500A.jaccard.dist, 6) #kmeans for jaccard (S500A)
+
+
+#Subsample B 
+
+# Calling the Kmeans funct for different distances - 6 clusters are defined 
+kmeans.wuni.S500B = kmeans(S500B.wuni.dist, 6) #kmeans for UnWeighted Unifrac (S500B)
+kmeans.uwuni.S500B = kmeans(S500B.uwuni.dist, 6) #kmeans for Weighted Unifrac (S500B)
+kmeans.jaccard.S500B = kmeans(S500B.jaccard.dist, 6) #kmeans for jaccard (S500B)
+
+# Find attributes for output of the kmeans results
+attributes(kmeans.wuni.S500B)
+attributes(kmeans.uwuni.S500B)
+attributes(kmeans.jaccard.S500B)
+
+# Find summary for kmeans output
+str(kmeans.wuni.S500B)
+
+```
+
+
+## 4.5 Plotting the kmeans results
+
+```{r}
+
+#Weighted Unifrac (S500B)
+plot(S500B.wuni.matx, col = kmeans.wuni.S500B$cluster, # Dist
+     main = "K-Means on weighted-UniFrac distance, HMPv35, subsample B") 
+points(kmeans.wuni.S500B$centers, col = c("gold"), pch = 20, cex = 2, lty = 2)
+legend("topleft", legend= c(kmeans.wuni.S500B$cluster), col = kmeans.wuni.S500B$cluster, 
+       cex=0.8, title = "Clusters")
+```
+
+## 4.6 Plotting a 2D representation of the clustering
+
+Using the cluster package we can get a 2D representation of the clustering which kmeans has calculated, this will show us how well our cluster solution has been applied to the data. Since each sample name is long (e.g. 1928.SRS019554.SRX020582.SRR043958) we first must rename them to teh numbers 1-500 (this subsample has 500 samples) so they can be shown graphically, thus our example sample becomes simply 1.
+
+```{r}
+
+library(cluster)
+
+# First change the column and row names to simply 1-500 so it is legible on the plot 
+rownames(S500A.wuni.matx) <- c(1:500)
+colnames(S500A.wuni.matx) <- c(1:500)
+
+clusplot(S500A.wuni.matx, kmeans.wuni.S500A$cluster, 
+         main='2D representation of the cluster solution, weighted UniFrac on subsample A',
+         color=TRUE, shade=TRUE,
+         labels=2, lines=0)
+
+```
+
+## 4.6 Plotting a a 2D representation using fviz_cluster (ggplot wrapper)
+
+fviz_cluster and fviz_dist are functions within the factoextra package they can help visualise distance matrices and clustering methods. Fviz_cluster performs PCA and plots data points according to the first two principle components which explain the majority of the variance. 
+
+```{r}
+
+library(factoextra)
+
+# Due to the large names of samples we need to convert the names in our dist object to numbers 
+rownames(S500A.wuni.matx) <- c(1:500)
+colnames(S500A.wuni.matx) <- c(1:500)
+
+# Subsample A 
+
+# Visualsing a distance 
+
+fviz_dist(S500A.wuni.dist, gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+
+# Plotting Cluster solutions using fviz_cluster
+
+# Weighted UniFrac
+fviz_cluster(kmeans.wuni.S500A, S500A.wuni.matx, show.clust.cent = TRUE, # on matrix complex
+             main = "Cluster plot for kmeans on weighted UniFrac, subsample A")
+
+#Unweighted UniFrac
+fviz_cluster(kmeans.uwuni.S500A, S500A.uwuni.matx, show.clust.cent = TRUE, # on matrix complex
+             main = "Cluster plot for kmeans on unweighted UniFrac, subsample A")
+
+#Jaccard
+fviz_cluster(kmeans.jaccard.S500A, S500A.jaccard.matx, show.clust.cent = TRUE, 
+             main = "Cluster plot for kmeans on Jaccard distance, subsample A")
+```
+
+## 4.7 Tabular Summaries of the kmeans results
+
+Using the table() function we can bring up a summary against any of the sample variables in the HMPv35 datset (e.g. sample_type). Then we can look for how many of each sample_type in cluster 1, then cluster 2 and so on. This is an informal way of verifying how effective our cluster solution is.
+
+```{r}
+table(sample_data(HM.S500A.prep)$sample_type,kmeans.jaccard.S500A$cluster) #sample_type v kmeans
+table(sample_data(HM.S500B.prep)$sample_type,kmeans.jaccard.S500B$cluster) #sample_type v kmeans
+```
+
+We can also look for bodysite 
+
+```{r}
+table(sample_data(HM.S500A.prep)$body_site,kmeans.jaccard.S500A$cluster) #body_site v kmeans
+table(sample_data(HM.S500B.prep)$body_site,kmeans.jaccard.S500B$cluster)  #body_site v kmeans
+```
+
+## 4.8 Calculating the Adjusted Rand Index for kmeans
+
+Using the MClust package - citation("mclust") - we can calculate the Adjusted Rand Index for our kmeans output, this is a more formal way of measuring how effective the clustering method is.  The adjusted rand index compares the clustering to other classifications such as sample_type, so the input for x can be our kmeans clusters, our input for y can be our sample_type. The closer to 1 the more similar they are, the closer to 0 the more differences. 
+
+```{r}
+
+library(mclust)
+
+```
+
+For subsample A
+
+```{r}
+
+# A - Weighted UniFrac
+adjustedRandIndex(kmeans.wuni.S500A$cluster, sample_data(HM.S500A.prep)$sample_type) # kmeans v sample_type 
+adjustedRandIndex(kmeans.wuni.S500A$cluster, sample_data(HM.S500A.prep)$body_site) # kmeans v body_site 
+
+# A - Unweighted UniFrac
+adjustedRandIndex(kmeans.uwuni.S500A$cluster, sample_data(HM.S500A.prep)$sample_type) # kmeans v sample_type 
+adjustedRandIndex(kmeans.uwuni.S500A$cluster, sample_data(HM.S500A.prep)$body_site) # kmeans v body_site 
+
+#  A - Jaccard
+adjustedRandIndex(kmeans.jaccard.S500A$cluster, sample_data(HM.S500A.prep)$sample_type) # kmeans v sample_type
+adjustedRandIndex(kmeans.jaccard.S500A$cluster, sample_data(HM.S500A.prep)$body_site) # kmeans v body_site 
+
+```
+
+For subsample B 
+
+```{r}
+
+#B - Weighted UniFrac
+adjustedRandIndex(kmeans.wuni.S500B$cluster, sample_data(HM.S500B.prep)$sample_type) # sample_type 
+adjustedRandIndex(kmeans.wuni.S500B$cluster, sample_data(HM.S500B.prep)$body_site) # body_site 
+
+# B - Unweighted UniFrac
+adjustedRandIndex(kmeans.uwuni.S500B$cluster, sample_data(HM.S500B.prep)$sample_type) # sample_type 
+adjustedRandIndex(kmeans.uwuni.S500B$cluster, sample_data(HM.S500B.prep)$body_site) # body_site
+
+# B - Jaccard
+adjustedRandIndex(kmeans.jaccard.S500B$cluster, sample_data(HM.S500B.prep)$sample_type) # sample_type 
+adjustedRandIndex(kmeans.jaccard.S500B$cluster, sample_data(HM.S500B.prep)$body_site) # body_site 
+```
+
+
+# 5. Hclust - Hierarchical Cluster Analysis of HMPv35
+
+## 5.1 Applying Hclust
+
+```{r}
+
+?Hclust 
+
+# Subsample A 
+hclust.wuni.S500A = hclust(S500A.wuni.dist) # Weighted UniFrac
+hclust.uwuni.S500A = hclust(S500A.uwuni.dist) # Unweighted Unifrac
+hclust.jaccard.S500A = hclust(S500A.jaccard.dist) # Jaccard
+
+```
+
+## 5.2 Plotting the Hclust results (Dendogram)
+
+```{r}
+
+# Subsample A
+
+# Weighted UniFrac
+plot(hclust.wuni.S500A, hang = 0.1, cex = 0.1, xlab = "Weighted UniFrac Distance",
+     main = "Weighted UniFrac Cluster Dendogram, subsample A") # Weighted UniFrac
+
+# Unweighted Unifrac
+plot(hclust.uwuni.S500A, hang = 0.1, cex = 0.1, xlab = "Unweighted UniFrac Distance",
+     main = "Unweighted UniFrac Cluster Dendogram, subsample A") # Unweighted Unifrac
+
+# Jaccard
+plot(hclust.jaccard.S500A, hang = 0.1, cex = 0.1, xlab = "Jaccard Distance",
+     main = "Jaccard Cluster Dendogram, subsample A") # Jaccard
+
+
+```
+
+## 5.3 Dividing the dendogram into groups
+
+```{r}
+
+# Subsample A
+
+# Weighted UniFrac
+# Plot
+plot(hclust.wuni.S500A, hang = 0.1, cex = 0.1, xlab = "Weighted UniFrac Distance",
+     main = "Weighted UniFrac Cluster Dendogram, subsample A") # Weighted UniFrac
+# Clusters
+groups.wuni <- cutree(hclust.wuni.S500A, k=6) # cut the tree into 6 clusters
+# draw the red borders on the dendogram according to the 6 clusters 
+rect.hclust(hclust.wuni.S500A, k=6, border="red")
+
+# Unweighted Unifrac
+# Plot
+plot(hclust.uwuni.S500A, hang = 0.1, cex = 0.1, xlab = "Unweighted UniFrac Distance",
+     main = "Unweighted UniFrac Cluster Dendogram, subsample A") # Unweighted Unifrac
+#Cluster
+groups.uwuni <- cutree(hclust.uwuni.S500A, k=6) # cut the tree into 6 clusters
+# draw the red borders on the dendogram according to the 6 clusters 
+rect.hclust(hclust.uwuni.S500A, k=6, border="red")
+
+# Jaccard
+# Plot
+plot(hclust.jaccard.S500A, hang = 0.1, cex = 0.1, xlab = "Jaccard Distance",
+     main = "Jaccard Cluster Dendogram, subsample A") # Jaccard
+# Cluster
+groups.jaccard <- cutree(hclust.jaccard.S500A, k=6) # cut the tree into 6 clusters
+# draw the red borders on the dendogram according to the 6 clusters 
+rect.hclust(hclust.jaccard.S500A, k=6, border="red")
+
+```
+
+## 5.4 Tabular Summaries of the Hclust results
+
+```{r}
+
+# Subsample A
+
+library(mclust)
+
+# Weighted UniFrac
+table(sample_data(HM.S500A.prep)$sample_type, groups.wuni) #sample_type
+table(sample_data(HM.S500A.prep)$body_site, groups.wuni) # body_site
+
+# Unweighted Unifrac
+table(sample_data(HM.S500A.prep)$sample_type, groups.uwuni) #sample_type
+
+# Jaccard
+table(sample_data(HM.S500A.prep)$sample_type, groups.jaccard) #sample_type
+
+```
+
+## 5.5 Calculating the Adjusted Rand Index for Hclust results
+Here we are once again using the adjustedRandIndex() function from Mclust
+
+```{r}
+
+library(mclust)
+
+# Subsample A
+
+# Weighted UniFrac - A
+adjustedRandIndex(groups.wuni, sample_data(HM.S500A.prep)$sample_type) #sample_type = 0.399848
+adjustedRandIndex(groups.wuni, sample_data(HM.S500A.prep)$body_site) #body_site = 0.1865675
+
+#Unweighted UniFrac - A
+adjustedRandIndex(groups.uwuni, sample_data(HM.S500A.prep)$sample_type) #sample_type = 0.1563937
+
+#Jaccard - A
+adjustedRandIndex(groups.jaccard, sample_data(HM.S500A.prep)$sample_type) #sample_type = 0.4471463
+
+```
