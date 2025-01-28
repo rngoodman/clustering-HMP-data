@@ -4,7 +4,7 @@
 
 ## Quick start
 
-Here is my [code for cluster analysis of HMPv35 data]([https://rngoodman.github.io/circular-genome-comparisons/circular_genome_comparisons.html](https://rngoodman.github.io/clustering-HMP-data/Clustering-Human-Microbiome-from-HMPv35.html)) primarily with the [Phyloseq](https://joey711.github.io/phyloseq/) package in R. 
+Here is my [code for cluster analysis of HMPv35 data](https://rngoodman.github.io/clustering-HMP-data/Clustering-Human-Microbiome-from-HMPv35.html) primarily with the [Phyloseq](https://joey711.github.io/phyloseq/) package in R. 
 
 ## About 
 
